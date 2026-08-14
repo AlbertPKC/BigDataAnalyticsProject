@@ -1,0 +1,68 @@
+# ============================================
+# Datasets — never commit. Pull from S3 instead.
+# See README.md for the canonical sample checksum.
+# ============================================
+*.csv
+*.parquet
+*.tsv
+data/
+itineraries*.csv
+*_sample.csv
+*_subset.csv
+
+# ============================================
+# Credentials — NEVER commit these
+# ============================================
+kaggle.json
+.aws/
+aws_credentials*
+*.pem
+*.env
+.env
+credentials.json
+config.json
+
+# ============================================
+# Python
+# ============================================
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+
+# ============================================
+# Jupyter
+# ============================================
+.ipynb_checkpoints/
+
+# ============================================
+# Spark / Hadoop / Hive local run artifacts
+# ============================================
+spark-warehouse/
+metastore_db/
+derby.log
+*.log
+hs_err_pid*.log
+checkpoint/
+
+# ============================================
+# OS / editor cruft
+# ============================================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+# ============================================
+# Local DB engine files (Postgres/MySQL data dirs if run outside Docker)
+# ============================================
+*.sqlite3
+mysql-data/
+pgdata/
