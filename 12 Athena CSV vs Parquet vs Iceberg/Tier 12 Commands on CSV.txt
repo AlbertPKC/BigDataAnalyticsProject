@@ -1,0 +1,23 @@
+-- Q1 on CSV
+SELECT * FROM flightdb_catalog.final_project_files
+WHERE legid = '9335fae376c38bb61263281779f469ec';
+
+-- Q2 on CSV
+SELECT * FROM flightdb_catalog.final_project_files
+WHERE startingairport='JFK' AND destinationairport='LAX'
+  AND flightdate BETWEEN '2022-06-01' AND '2022-06-30'
+  AND totalfare < 300;
+
+-- Q3 on CSV
+SELECT startingairport, destinationairport,
+       substr(flightdate, 1, 7) AS month,
+       AVG(totalfare) AS avg_fare, COUNT(*) AS n
+FROM flightdb_catalog.final_project_files
+GROUP BY startingairport, destinationairport, substr(flightdate, 1, 7)
+ORDER BY month;
+
+-- Q4 on CSV
+SELECT startingairport, destinationairport, isnonstop,
+       AVG(totalfare) AS avg_fare
+FROM flightdb_catalog.final_project_files
+GROUP BY startingairport, destinationairport, isnonstop;

@@ -1,0 +1,32 @@
+-- Q1 on Iceberg
+SELECT * FROM AwsDataCatalog.flightslakehouse.flights
+WHERE legid = '9335fae376c38bb61263281779f469ec';
+
+-- Q2 on Iceberg
+SELECT * FROM AwsDataCatalog.flightslakehouse.flights
+WHERE startingairport='JFK' AND destinationairport='LAX'
+  AND flightdate BETWEEN DATE '2022-06-01' AND DATE '2022-06-30'
+  AND totalfare < 300;
+
+-- Q3 on Iceberg
+SELECT startingairport, destinationairport,
+       date_format(flightdate, '%Y-%m') AS month,
+       AVG(totalfare) AS avg_fare, COUNT(*) AS n
+FROM AwsDataCatalog.flightslakehouse.flights
+GROUP BY startingairport, destinationairport, date_format(flightdate, '%Y-%m')
+ORDER BY month;
+
+-- Q4 on Iceberg
+SELECT startingairport, destinationairport, isnonstop,
+       AVG(totalfare) AS avg_fare
+FROM AwsDataCatalog.flightslakehouse.flights
+GROUP BY startingairport, destinationairport, isnonstop;
+
+-- Q5 on Iceberg (Insert)
+INSERT INTO AwsDataCatalog.flightslakehouse.flights 
+VALUES ('synthetic-athena-003', DATE '2022-07-01', DATE '2022-08-01', 'JFK', 'LAX', 'SYN', '00:00', 0, false, false, false, 250.00, 300.00, 10, 500, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+
+-- Q6 on Iceberg (Update)
+UPDATE AwsDataCatalog.flightslakehouse.flights
+SET seatsremaining = seatsremaining - 1
+WHERE flightdate = DATE '2022-07-04' AND startingairport = 'ATL';

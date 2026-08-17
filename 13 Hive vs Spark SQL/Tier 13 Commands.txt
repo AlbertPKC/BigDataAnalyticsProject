@@ -1,0 +1,32 @@
+hive
+
+CREATE EXTERNAL TABLE IF NOT EXISTS flights_hive (
+  legid STRING, searchdate STRING, flightdate STRING, startingairport STRING,
+  destinationairport STRING, farebasiscode STRING, travelduration STRING, elapseddays INT,
+  isbasiceconomy BOOLEAN, isrefundable BOOLEAN, isnonstop BOOLEAN, basefare DOUBLE,
+  totalfare DOUBLE, seatsremaining INT, totaltraveldistance INT
+)
+ROW FORMAT DELIMITED FIELDS TERMINATED BY ','
+STORED AS TEXTFILE
+LOCATION 's3://aws-logs-518537549162-us-east-1/Final Project Files/'
+TBLPROPERTIES ('skip.header.line.count'='1');
+
+SET hive.exec.compress.output=false;
+SET mapreduce.output.fileoutputformat.compress=false;
+
+SELECT startingairport, destinationairport,
+       substr(flightdate, 1, 7) AS month,
+       AVG(totalfare) AS avg_fare, COUNT(*) AS n
+FROM flights_hive
+GROUP BY startingairport, destinationairport, substr(flightdate, 1, 7);
+
+-- Note the "Time taken: X.X seconds" output, then type:
+exit;
+
+time spark-sql -e "
+SELECT startingairport, destinationairport,
+       substr(flightdate, 1, 7) AS month,
+       AVG(totalfare) AS avg_fare, COUNT(*) AS n
+FROM flightdb_catalog.final_project_files
+GROUP BY startingairport, destinationairport, substr(flightdate, 1, 7);
+" 2>&1 | tee tier13_sparksql.log

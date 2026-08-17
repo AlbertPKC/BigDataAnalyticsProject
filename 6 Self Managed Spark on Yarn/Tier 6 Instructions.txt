@@ -1,0 +1,99 @@
+mkdir -p ~/workspace/tier6
+cd ~/workspace/tier6
+
+cat > q1_singlerow.py << 'EOF'
+import time
+from pyspark.sql import SparkSession
+
+spark = SparkSession.builder.appName("Tier6Q1SingleRow").getOrCreate()
+INPUT = "/user/ubuntu/tier5/itineraries_sample.csv"
+df = spark.read.option("header", True).csv(INPUT)
+
+t0 = time.time()
+result = df.filter(df.legId == "9335fae376c38bb61263281779f469ec")
+result.show(truncate=False)
+n = result.count()
+print(f"Q1 internal elapsed (informational only, use 'time' from shell for the real number): {time.time() - t0:.4f} sec, rows returned: {n}")
+spark.stop()
+EOF
+
+cat > q2_range.py << 'EOF'
+import time
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col
+
+spark = SparkSession.builder.appName("Tier6Q2Range").getOrCreate()
+INPUT = "/user/ubuntu/tier5/itineraries_sample.csv"
+df = spark.read.option("header", True).csv(INPUT)
+
+t0 = time.time()
+result = df.filter(
+    (col("startingAirport") == "JFK") &
+    (col("destinationAirport") == "LAX") &
+    (col("flightDate") >= "2022-06-01") &
+    (col("flightDate") <= "2022-06-30") &
+    (col("totalFare").cast("double") < 300)
+)
+result.show(20, truncate=False)
+n = result.count()
+print(f"Q2 internal elapsed (informational only, use 'time' from shell for the real number): {time.time() - t0:.4f} sec, rows returned: {n}")
+spark.stop()
+EOF
+
+cat > q3_aggregation.py << 'EOF'
+import time
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, to_date, date_format, avg, count
+
+spark = SparkSession.builder.appName("Tier6Q3Aggregation").getOrCreate()
+INPUT = "/user/ubuntu/tier5/itineraries_sample.csv"
+df = spark.read.option("header", True).csv(INPUT)
+
+t0 = time.time()
+result = (
+    df.withColumn("month", date_format(to_date(col("flightDate"), "yyyy-MM-dd"), "yyyy-MM"))
+      .withColumn("totalFare", col("totalFare").cast("double"))
+      .groupBy("startingAirport", "destinationAirport", "month")
+      .agg(avg("totalFare").alias("avg_fare"), count("*").alias("n"))
+      .orderBy("month")
+)
+result.show(20, truncate=False)
+n = result.count()
+print(f"Q3 internal elapsed (informational only, use 'time' from shell for the real number): {time.time() - t0:.4f} sec, groups returned: {n}")
+spark.stop()
+EOF
+
+cat > q4_enrichment.py << 'EOF'
+import time
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, avg
+
+spark = SparkSession.builder.appName("Tier6Q4Enrichment").getOrCreate()
+INPUT = "/user/ubuntu/tier5/itineraries_sample.csv"
+df = spark.read.option("header", True).csv(INPUT)
+
+t0 = time.time()
+result = (
+    df.withColumn("totalFare", col("totalFare").cast("double"))
+      .groupBy("startingAirport", "destinationAirport", "isNonStop")
+      .agg(avg("totalFare").alias("avg_fare"))
+)
+result.show(20, truncate=False)
+n = result.count()
+print(f"Q4 internal elapsed (informational only, use 'time' from shell for the real number): {time.time() - t0:.4f} sec, groups returned: {n}")
+spark.stop()
+EOF
+
+# Submission loop
+for q in q1_singlerow q2_range q3_aggregation q4_enrichment; do
+  echo "=== Running $q ==="
+  bash -c "time spark-submit \
+    --master yarn \
+    --deploy-mode client \
+    --executor-memory 1g \
+    --executor-cores 1 \
+    --num-executors 2 \
+    --driver-memory 1g \
+    ${q}.py" > ${q}_output.log 2>&1
+  tail -20 ${q}_output.log
+done

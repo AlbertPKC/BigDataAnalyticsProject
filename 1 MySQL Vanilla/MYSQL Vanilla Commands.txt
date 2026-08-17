@@ -1,0 +1,42 @@
+Q1
+SELECT * FROM flights WHERE legId = '9335fae376c38bb61263281779f469ec'\G
+
+Q2
+SELECT * FROM flights
+WHERE startingAirport='JFK' AND destinationAirport='LAX'
+  AND flightDate BETWEEN '2022-06-01' AND '2022-06-30'
+  AND totalFare < 300\G
+
+Q3
+SELECT startingAirport, destinationAirport,
+       DATE_FORMAT(flightDate, '%Y-%m') AS month,
+       AVG(totalFare) AS avg_fare, COUNT(*) AS n
+FROM flights
+GROUP BY startingAirport, destinationAirport, month
+ORDER BY month\G
+
+Q4
+SELECT startingAirport, destinationAirport, isNonStop,
+       AVG(totalFare) AS avg_fare
+FROM flights
+GROUP BY startingAirport, destinationAirport, isNonStop\G
+
+Q5
+INSERT INTO flights (legId, searchDate, flightDate, startingAirport, destinationAirport,
+  fareBasisCode, travelDuration, elapsedDays, isBasicEconomy, isRefundable, isNonStop,
+  baseFare, totalFare, seatsRemaining, totalTravelDistance,
+  segmentsDepartureTimeEpochSeconds, segmentsDepartureTimeRaw,
+  segmentsArrivalTimeEpochSeconds, segmentsArrivalTimeRaw,
+  segmentsArrivalAirportCode, segmentsDepartureAirportCode,
+  segmentsAirlineName, segmentsAirlineCode, segmentsEquipmentDescription,
+  segmentsDurationInSeconds, segmentsDistance, segmentsCabinCode)
+VALUES ('synthetic-tier2-test', '2022-08-01', '2022-08-02', 'JFK', 'LAX',
+  'TESTCODE', 'PT6H', 0, 0, 0, 1, 300.00, 350.00, 10, 2475,
+  '1658812800', '2022-08-02T08:00:00.000-04:00',
+  '1658827200', '2022-08-02T12:00:00.000-04:00',
+  'LAX', 'JFK', 'Delta', 'DL',
+  'Boeing 737-800', '14400', '2475', 'coach')\G
+
+Q6
+UPDATE flights SET seatsRemaining = seatsRemaining - 1
+WHERE flightDate = '2022-07-04' AND startingAirport = 'ATL'\G
