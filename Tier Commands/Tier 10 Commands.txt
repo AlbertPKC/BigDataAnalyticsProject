@@ -1,0 +1,209 @@
+# =====================================================================
+# TIER 10 - SPARK SQL / DATAFRAMES (JOINS AND WINDOW FUNCTIONS)
+# Cluster: 3x EMR m5.xlarge (1 primary, 2 core) - SAME spec as Tier 9
+# Data:    read directly from S3, same object as Tiers 7-9
+#
+# THIS TIER IS NOT A TIMING BENCHMARK.
+# Q1-Q6 are deliberately NOT re-run here. Running them again on
+# identical hardware to Tier 9 would only reproduce Tier 9's numbers
+# with sampling noise. The purpose of this tier is to document HOW
+# Spark executes a query, as evidence for the report section explaining
+# the Spark approach. Its output is qualitative, not comparative.
+#
+# Three artefacts are produced:
+#   1. A genuine multi-table .join() against a hub-size lookup table
+#   2. A window function ranking routes per month
+#   3. The captured physical plan showing the Exchange (shuffle) step
+#
+# Logged results:
+#   STEP1_JOIN    103.9213s
+#   STEP2_WINDOW   37.1429s
+#   LOAD          107.26s (cold, fresh cluster restart, 41,069,377 rows)
+# =====================================================================
+
+mkdir -p ~/tier10
+cd ~/tier10
+
+# Launch the interactive shell. Wait for the Spark banner and confirm
+# there are no ERROR lines about YARN connection failures.
+# NOTE: run this from the bash prompt. Pasting Python at the bash prompt
+# gives "syntax error near unexpected token (" - that means you are not
+# inside the PySpark REPL yet.
+pyspark --master yarn
+
+# ---------------------------------------------------------------------
+# LOAD - shared setup for all three artefacts below
+# The bucket folder name contains a space. That is fine inside a Python
+# string, but must be quoted if referenced from the AWS CLI:
+#   aws s3 ls "s3://aws-logs-518537549162-us-east-1/Final Project Files/"
+# ---------------------------------------------------------------------
+cat > tier10_setup.py << 'EOF'
+import time
+from pyspark.sql import SparkSession
+from pyspark.sql import functions as F
+from pyspark.sql.window import Window
+
+spark = SparkSession.builder.appName("Tier10SparkSQL").getOrCreate()
+INPUT = "s3://aws-logs-518537549162-us-east-1/Final Project Files/itineraries_sample.csv"
+
+t0 = time.time()
+df = spark.read.option("header", True).csv(INPUT)
+df = df.withColumn("totalFare", F.col("totalFare").cast("double"))
+print("Row count:", df.count())
+print(f"LOAD elapsed: {time.time() - t0:.4f} sec")
+df.printSchema()
+EOF
+
+# ---------------------------------------------------------------------
+# ARTEFACT 1 - THE JOIN
+# A real multi-table .join(), not a groupBy dressed up as one.
+#
+# A small synthetic lookup table classifies each of the 16 airports by
+# hub size. It is joined TWICE against the main DataFrame: once on
+# startingAirport and once on destinationAirport, so each itinerary is
+# enriched with the hub size at both ends of the route.
+#
+# Because the lookup table is tiny, Spark broadcasts it to every
+# executor rather than shuffling the 41M-row side. That is why this
+# join costs far less than a shuffle join would.
+# ---------------------------------------------------------------------
+cat > tier10_step1_join.py << 'EOF'
+import time
+from pyspark.sql import SparkSession
+from pyspark.sql import functions as F
+
+spark = SparkSession.builder.appName("Tier10Step1Join").getOrCreate()
+INPUT = "s3://aws-logs-518537549162-us-east-1/Final Project Files/itineraries_sample.csv"
+df = spark.read.option("header", True).csv(INPUT)
+df = df.withColumn("totalFare", F.col("totalFare").cast("double"))
+
+# Synthetic airport hub-size lookup table
+hub_data = [
+    ("ATL", "major_hub"), ("ORD", "major_hub"), ("DFW", "major_hub"),
+    ("LAX", "major_hub"), ("DEN", "major_hub"), ("JFK", "major_hub"),
+    ("SFO", "mid_hub"),   ("EWR", "mid_hub"),   ("MIA", "mid_hub"),
+    ("BOS", "mid_hub"),   ("CLT", "mid_hub"),   ("LGA", "mid_hub"),
+    ("IAD", "small_hub"), ("PHL", "small_hub"), ("DTW", "small_hub"),
+    ("OAK", "small_hub"),
+]
+hubs = spark.createDataFrame(hub_data, ["airport", "hub_size"])
+
+t0 = time.time()
+
+# Join 1: enrich with the ORIGIN airport hub size
+enriched = df.join(
+    hubs.withColumnRenamed("airport", "startingAirport")
+        .withColumnRenamed("hub_size", "origin_hub_size"),
+    on="startingAirport",
+    how="left"
+)
+
+# Join 2: enrich with the DESTINATION airport hub size
+enriched = enriched.join(
+    hubs.withColumnRenamed("airport", "destinationAirport")
+        .withColumnRenamed("hub_size", "dest_hub_size"),
+    on="destinationAirport",
+    how="left"
+)
+
+# Any airport not present in the lookup falls back to unclassified
+enriched = (enriched
+    .fillna({"origin_hub_size": "unclassified", "dest_hub_size": "unclassified"}))
+
+result = (enriched
+    .groupBy("origin_hub_size", "dest_hub_size")
+    .agg(F.avg("totalFare").alias("avg_fare"),
+         F.count("*").alias("n"))
+    .orderBy("origin_hub_size", "dest_hub_size"))
+
+result.show(50, truncate=False)
+print(f"STEP1_JOIN elapsed: {time.time() - t0:.4f} sec")
+spark.stop()
+EOF
+
+# ---------------------------------------------------------------------
+# ARTEFACT 2 - THE WINDOW FUNCTION
+# Ranks routes by average fare WITHIN each month and keeps the top 5.
+#
+# The key difference from a plain groupBy: a window function ranks rows
+# inside a group WITHOUT collapsing the group. A groupBy would reduce
+# each month to a single row; a window keeps every route row and adds a
+# rank column alongside it.
+# ---------------------------------------------------------------------
+cat > tier10_step2_window.py << 'EOF'
+import time
+from pyspark.sql import SparkSession
+from pyspark.sql import functions as F
+from pyspark.sql.window import Window
+
+spark = SparkSession.builder.appName("Tier10Step2Window").getOrCreate()
+INPUT = "s3://aws-logs-518537549162-us-east-1/Final Project Files/itineraries_sample.csv"
+df = spark.read.option("header", True).csv(INPUT)
+df = df.withColumn("totalFare", F.col("totalFare").cast("double"))
+
+t0 = time.time()
+
+monthly = (df.withColumn("month", F.date_format(F.to_date("flightDate", "yyyy-MM-dd"), "yyyy-MM"))
+             .groupBy("startingAirport", "destinationAirport", "month")
+             .agg(F.avg("totalFare").alias("avg_fare")))
+
+w = Window.partitionBy("month").orderBy(F.desc("avg_fare"))
+ranked = monthly.withColumn("rank", F.rank().over(w))
+ranked.filter(F.col("rank") <= 5).orderBy("month", "rank").show(50, truncate=False)
+
+print(f"STEP2_WINDOW elapsed: {time.time() - t0:.4f} sec")
+spark.stop()
+EOF
+
+# ---------------------------------------------------------------------
+# ARTEFACT 3 - THE PHYSICAL PLAN
+# This is the evidence artefact for the report. Save the output to
+# /results/tier10_physical_plan.txt
+#
+# The plan has six steps. Read them top to bottom:
+#   (1) Scan csv          - read only the 4 columns needed of the 27
+#   (2) Project           - cast totalFare, derive the month string
+#   (3) HashAggregate     - PARTIAL aggregate, computed on each node
+#   (4) Exchange          - THE SHUFFLE. Data crosses the network here.
+#   (5) HashAggregate     - FINAL aggregate, combining partial results
+#   (6) AdaptiveSparkPlan - runtime re-optimisation wrapper
+#
+# Step 4 is the important one for the report. The Exchange is the
+# mechanical reason a distributed aggregation costs more than a local
+# one, and it explains why Q3 took longer than Q1 on every cluster
+# tier. Steps 3 and 5 are why Spark beats MapReduce: the partial
+# aggregate at step 3 means only per-node subtotals cross the network
+# at step 4, not all 41 million individual fares.
+# ---------------------------------------------------------------------
+cat > tier10_step3_plan.py << 'EOF'
+from pyspark.sql import SparkSession
+from pyspark.sql import functions as F
+
+spark = SparkSession.builder.appName("Tier10Step3Plan").getOrCreate()
+INPUT = "s3://aws-logs-518537549162-us-east-1/Final Project Files/itineraries_sample.csv"
+df = spark.read.option("header", True).csv(INPUT)
+
+monthly = (df.withColumn("totalFare", F.col("totalFare").cast("double"))
+             .withColumn("month", F.date_format(F.to_date("flightDate", "yyyy-MM-dd"), "yyyy-MM"))
+             .groupBy("startingAirport", "destinationAirport", "month")
+             .agg(F.avg("totalFare").alias("avg_fare")))
+
+# explain() is NOT an action, so this costs almost nothing to run.
+monthly.explain(mode="formatted")
+spark.stop()
+EOF
+
+# ---------------------------------------------------------------------
+# Run all three and capture the output
+# ---------------------------------------------------------------------
+{ time spark-submit --master yarn --deploy-mode client tier10_step1_join.py ; } > tier10_step1_join_output.log 2>&1
+{ time spark-submit --master yarn --deploy-mode client tier10_step2_window.py ; } > tier10_step2_window_output.log 2>&1
+spark-submit --master yarn --deploy-mode client tier10_step3_plan.py > tier10_physical_plan.txt 2>&1
+
+grep "elapsed" tier10_step1_join_output.log tier10_step2_window_output.log
+grep "real" tier10_step1_join_output.log tier10_step2_window_output.log
+
+# Copy the plan into the results folder for the report
+cp tier10_physical_plan.txt ~/results/tier10_physical_plan.txt
+
+# Terminate the cluster once all three artefacts are captured.
